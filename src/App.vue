@@ -7,50 +7,60 @@ import TabPanel from 'primevue/tabpanel'
 import Card from 'primevue/card'
 import Checkbox from 'primevue/checkbox'
 import { Form } from '@primevue/forms'
-import { InputText, Button } from 'primevue'
+import { Button, Message, Textarea } from 'primevue'
 
-import { ref, reactive } from 'vue'
+import { ref, onMounted } from 'vue'
+import { supabase } from './lib/supabaseClient'
 
-const allMenus = reactive([
-  {
-    id: 1,
-    name: 'Bayar Tagihan Gas ke katiran',
-  },
-  {
-    id: 2,
-    name: 'Beli minyak 5 kg',
-  },
-  {
-    id: 3,
-    name: 'Bayar uang gas ke sekolah dan beli minyak lagi',
-  },
-])
-const selectedCategories = ref([])
+const tasks = ref([])
+const selectedTasks = ref([])
+const loading = ref(false)
+
+onMounted(fetchTasks)
+
+async function fetchTasks() {
+  const { data, error } = await supabase.from(`tasks`).select().order(`id`, { ascending: false })
+
+  if (!error) {
+    tasks.value = data
+  }
+}
+
+async function addTask(title) {
+  if (loading.value) return
+  if (!title.trim()) return
+
+  loading.value = true
+
+  const { error } = await supabase.from('tasks').insert({
+    title,
+  })
+
+  loading.value = false
+
+  if (!error) {
+    fetchTasks()
+  } else {
+    console.log(error)
+  }
+}
+
+const onFormSubmit = ({ values }) => {
+  console.log(values)
+  addTask(values.title)
+}
 
 const resolver = ({ values }) => {
   const errors = {}
 
-  if (!values.username) {
+  if (!values.title) {
     errors.title = [{ message: 'Title is required.' }]
   }
 
   return {
-    values, // (Optional) Used to pass current form values to submit event.
+    values,
     errors,
   }
-}
-
-const addMenu = () => {
-  const nextId = allMenus.length > 0 ? Math.max(...allMenus.map((m) => m.id)) + 1 : 1
-
-  allMenus.push({
-    id: nextId,
-    name: `Menu ${nextId}`,
-  })
-}
-
-const onFormSubmit = () => {
-  addMenu()
 }
 </script>
 
@@ -60,12 +70,16 @@ const onFormSubmit = () => {
       <template #title>
         <h1 class="text-4xl text-center">Daily Notes</h1>
         <Form
+          v-slot="$form"
           :resolver="resolver"
           @submit="onFormSubmit"
-          class="mt-8 flex flex-row gap-2 w-full sm:w-56"
+          class="mt-8 flex flex-col gap-2 w-full"
         >
           <div class="flex flex-col gap-1">
-            <InputText name="title" type="text" placeholder="type..." fluid />
+            <Textarea name="title" class="w-full" />
+            <Message v-if="$form.title?.invalid" severity="error" size="small" variant="simple">{{
+              $form.title.error?.message
+            }}</Message>
           </div>
           <Button type="submit" severity="contrast" label="Add" />
         </Form>
@@ -80,34 +94,33 @@ const onFormSubmit = () => {
             <TabPanel value="0" class="-ml-4">
               <div class="card flex flex-col flex-wrap justify-center gap-4">
                 <div
-                  v-for="menu in [...allMenus].reverse()"
-                  :key="menu.id"
+                  v-for="task in [...tasks].reverse()"
+                  :key="task.id"
                   class="flex items-center gap-2"
                 >
                   <Checkbox
-                    v-model="selectedCategories"
-                    :inputId="`${menu.id}`"
+                    v-model="selectedTasks"
+                    :inputId="`${task.id}`"
                     name="category"
-                    :value="menu.id"
+                    :value="task.id"
                   />
                   <label
-                    :for="menu.id"
+                    :for="task.id"
                     class="hover:cursor-pointer"
-                    :class="{ 'line-through text-gray-400': selectedCategories.includes(menu.id) }"
-                    >{{ menu.name }}
+                    :class="{ 'line-through text-gray-400': selectedTasks.includes(task.id) }"
+                    >{{ task.title }}
                   </label>
                 </div>
               </div>
             </TabPanel>
             <TabPanel value="1">
-              <p class="m-0">
-                Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium
-                doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore
-                veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam
-                voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur
-                magni dolores eos qui ratione voluptatem sequi nesciunt. Consectetur, adipisci
-                velit, sed quia non numquam eius modi.
-              </p>
+              <h1>Todo List</h1>
+
+              <ul>
+                <li v-for="task in tasks" :key="task.id">
+                  {{ task.title }}
+                </li>
+              </ul>
             </TabPanel>
           </TabPanels>
         </Tabs>
