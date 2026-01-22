@@ -1,6 +1,9 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
+import ConfirmationService from 'primevue/confirmationservice'
+import ToastService from 'primevue/toastservice'
+import Toast from 'primevue/toast'
 
 // Tailwind + PrimeUI
 import './assets/main.css'
@@ -20,5 +23,9 @@ app.use(PrimeVue, {
     },
   },
 })
+app.use(ConfirmationService)
+app.use(ToastService)
+
+app.component('Toast', Toast)
 
 app.mount('#app')

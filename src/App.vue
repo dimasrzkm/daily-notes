@@ -7,13 +7,19 @@ import TabPanel from 'primevue/tabpanel'
 import Card from 'primevue/card'
 import Checkbox from 'primevue/checkbox'
 import { Form } from '@primevue/forms'
+import ConfirmPopup from 'primevue/confirmpopup'
 import { Button, Message, Textarea } from 'primevue'
 
 import { ref, onMounted } from 'vue'
 import { supabase } from './lib/supabaseClient'
+import { useConfirm } from 'primevue/useconfirm'
+import { useToast } from 'primevue/usetoast'
 
 const tasks = ref([])
 const initialLoading = ref(true)
+
+const confirm = useConfirm()
+const toast = useToast()
 
 onMounted(async () => {
   await fetchTasks()
@@ -70,8 +76,6 @@ async function toggleDone(task, value) {
 }
 
 async function deleteTask(id) {
-  if (!confirm('Hapus task ini?')) return
-
   const previousTasks = [...tasks.value]
   tasks.value = tasks.value.filter((task) => task.id !== id)
 
@@ -99,9 +103,51 @@ const resolver = ({ values }) => {
     errors,
   }
 }
+
+// Reject Popup
+const confirm2 = (id, event) => {
+  confirm.require({
+    target: event.currentTarget,
+    message: 'Do you want to delete this record?',
+    icon: 'pi pi-info-circle',
+    rejectProps: {
+      label: 'Cancel',
+      severity: 'secondary',
+      outlined: true,
+    },
+    acceptProps: {
+      label: 'Delete',
+      severity: 'danger',
+    },
+    accept: () => {
+      deleteTask(id)
+      toast.add({
+        severity: 'success',
+        summary: 'Confirmed',
+        detail: 'Record deleted',
+        life: 3000,
+        styleClass: 'w-68',
+        baseZIndex: 10,
+      })
+    },
+    reject: () => {
+      toast.add({
+        severity: 'error',
+        summary: 'Rejected',
+        detail: 'You have rejected',
+        life: 3000,
+        styleClass: 'w-68',
+        autoZIndex: true,
+      })
+    },
+  })
+}
 </script>
 
 <template>
+  <Toast />
+  <ConfirmPopup />
+
   <div class="flex justify-center items-center mt-16">
     <Card class="w-xs min:max-w-2xl sm:w-md">
       <template #title>
@@ -164,7 +210,7 @@ const resolver = ({ values }) => {
                       text
                       severity="danger"
                       class="shrink-0 ml-6"
-                      @click="deleteTask(task.id)"
+                      @click="confirm2(task.id, $event)"
                     />
                   </div>
                 </TransitionGroup>
