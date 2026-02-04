@@ -15,32 +15,93 @@ import { supabase } from './lib/supabaseClient'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 
-const tasks = ref([])
+const toast = useToast()
+const confirm = useConfirm()
+
+const tasks = ref([]) // SEMUA tanggal
+const todayTask = ref(null) // khusus hari ini
+const taskId = ref(null)
+const activeTaskId = ref(null)
+
 const initialLoading = ref(true)
 
-const confirm = useConfirm()
-const toast = useToast()
+const today = new Date().toISOString().slice(0, 10)
 
-onMounted(async () => {
-  await fetchTasks()
-  initialLoading.value = false
-})
-
-const taskId = ref(null)
+const activeTask = computed(() => tasks.value.find((t) => t.id === activeTaskId.value))
 
 const filteredTasks = computed(() => {
+  if (!tasks.value.length) return []
+
   return tasks.value.map((task) => ({
     ...task,
     detail_tasks: (task.detail_tasks || []).filter((d) => d.deleted_at === null),
   }))
 })
 
-async function fetchTasks() {
-  const { data, error } = await supabase.from('tasks').select(
-    `
+onMounted(async () => {
+  await initTodayTask()
+  await fetchTodayTasks()
+  await fetchAllTasks()
+
+  activeTaskId.value = todayTask.value?.id
+  initialLoading.value = false
+})
+
+async function fetchAllTasks() {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select(
+      `
       id,
+      date,
       title,
-      created_at,
+      detail_tasks (
+        id,
+        task,
+        is_done,
+        deleted_at
+      )
+    `,
+    )
+    .order('date', { ascending: false })
+
+  if (!error) {
+    tasks.value = data || []
+  }
+}
+
+// ====== INIT TASK PER HARI ======
+async function initTodayTask() {
+  // cek apakah hari ini sudah ada
+  const { data } = await supabase.from('tasks').select('*').eq('date', today).maybeSingle()
+
+  if (data) {
+    taskId.value = data.id
+    return
+  }
+
+  // kalau belum → buat baru
+  const { data: newTask } = await supabase
+    .from('tasks')
+    .insert({
+      date: today,
+      title: `Daily Notes - ${today}`,
+    })
+    .select()
+    .single()
+
+  taskId.value = newTask.id
+}
+
+// ====== FETCH ======
+async function fetchTodayTasks() {
+  const { data } = await supabase
+    .from('tasks')
+    .select(
+      `
+      id,
+      date,
+      title,
       detail_tasks (
         id,
         task,
@@ -49,25 +110,19 @@ async function fetchTasks() {
         deleted_at
       )
     `,
-  )
+    )
+    .eq('date', today)
+    .single()
 
-  if (!error) {
-    tasks.value = data
-    taskId.value = data[0].id
-  }
-
-  tasks.value = data || []
+  tasks.value = data ? [data] : []
 }
 
 async function addTask(title) {
   if (!title.trim()) return
 
-  // ambil parent task (misalnya task pertama)
-  const parentTask = tasks.value.find((t) => t.id === taskId.value)
-  if (!parentTask) return
+  const parent = tasks.value[0]
 
-  // 1️⃣ temp detail task (OPTIMISTIC)
-  const tempDetail = {
+  const temp = {
     id: `temp-${Date.now()}`,
     task: title,
     is_done: false,
@@ -75,18 +130,9 @@ async function addTask(title) {
     pending: true,
   }
 
-  // pastikan array ada
-  if (!parentTask.detail_tasks) {
-    parentTask.detail_tasks = []
-  }
-
-  // tambahkan ke UI
-  parentTask.detail_tasks.unshift(tempDetail)
-
-  // biarkan render dulu
+  parent.detail_tasks.unshift(temp)
   await new Promise((r) => requestAnimationFrame(r))
 
-  // 2️⃣ kirim ke database
   const { data, error } = await supabase
     .from('detail_tasks')
     .insert({
@@ -97,56 +143,42 @@ async function addTask(title) {
     .single()
 
   if (error) {
-    // rollback
-    parentTask.detail_tasks = parentTask.detail_tasks.filter((d) => d.id !== tempDetail.id)
+    parent.detail_tasks = parent.detail_tasks.filter((d) => d.id !== temp.id)
     return
   }
 
-  // update IN-PLACE (INI KUNCI)
-  Object.assign(tempDetail, data)
-  delete tempDetail.pending
+  Object.assign(temp, data)
+  delete temp.pending
 }
 
-async function toggleDone(task, value) {
-  task.is_done = value
-  const { error } = await supabase.from('detail_tasks').update({ is_done: value }).eq('id', task.id)
+async function toggleDone(detail, value) {
+  detail.is_done = value
 
-  if (error) {
-    task.is_done = !value
-  }
+  const { error } = await supabase
+    .from('detail_tasks')
+    .update({ is_done: value })
+    .eq('id', detail.id)
+
+  if (error) detail.is_done = !value
 }
 
 async function deleteTask(detailId) {
-  for (const task of tasks.value) {
-    const detail = task.detail_tasks?.find((d) => d.id === detailId)
-    if (detail) {
-      detail.deleted_at = new Date().toISOString()
-      break
-    }
-  }
+  const parent = tasks.value[0]
+  const target = parent.detail_tasks.find((d) => d.id === detailId)
 
-  // 2️⃣ Update ke database
+  target.deleted_at = new Date().toISOString()
+
   const { error } = await supabase
     .from('detail_tasks')
-    .update({ deleted_at: new Date().toISOString() })
+    .update({ deleted_at: target.deleted_at })
     .eq('id', detailId)
 
   if (error) {
-    console.error(error)
-
-    // 3️⃣ Rollback kalau gagal
-    for (const task of tasks.value) {
-      const detail = task.detail_tasks?.find((d) => d.id === detailId)
-      if (detail) {
-        detail.deleted_at = null
-        break
-      }
-    }
+    target.deleted_at = null
   }
 }
 
 const onFormSubmit = ({ values }) => {
-  console.log(values)
   addTask(values.title)
 }
 
@@ -278,13 +310,37 @@ const confirm2 = (id, event) => {
               </div>
             </TabPanel>
             <TabPanel value="1">
-              <h1>Todo List</h1>
+              <div class="grid grid-cols-2 gap-4">
+                <!-- KIRI: LIST TANGGAL -->
+                <ul class="space-y-2 border-r pr-3">
+                  <li
+                    v-for="task in tasks"
+                    :key="task.id"
+                    @click="activeTaskId = task.id"
+                    class="cursor-pointer rounded px-2 py-1 hover:bg-gray-100"
+                    :class="{
+                      'bg-gray-200 font-semibold': task.id === activeTaskId,
+                    }"
+                  >
+                    {{ task.date }}
+                  </li>
+                </ul>
 
-              <ul>
-                <li v-for="detail in tasks[0]?.detail_tasks || []" :key="detail.id">
-                  {{ detail.task }}
-                </li>
-              </ul>
+                <!-- KANAN: DETAIL TASK -->
+                <div>
+                  <h2 v-if="activeTask" class="font-semibold mb-2">
+                    Detail — {{ activeTask.date }}
+                  </h2>
+
+                  <ul v-if="activeTask?.detail_tasks?.length">
+                    <li v-for="detail in activeTask.detail_tasks" :key="detail.id" class="text-sm">
+                      • {{ detail.task }}
+                    </li>
+                  </ul>
+
+                  <p v-else class="text-sm text-gray-400">Pilih tanggal untuk melihat detail</p>
+                </div>
+              </div>
             </TabPanel>
           </TabPanels>
         </Tabs>
