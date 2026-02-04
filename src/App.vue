@@ -10,7 +10,7 @@ import { Form } from '@primevue/forms'
 import ConfirmPopup from 'primevue/confirmpopup'
 import { Button, Message, Textarea } from 'primevue'
 
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { supabase } from './lib/supabaseClient'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -26,11 +26,34 @@ onMounted(async () => {
   initialLoading.value = false
 })
 
+const taskId = ref(null)
+
+const filteredTasks = computed(() => {
+  return tasks.value.map((task) => ({
+    ...task,
+    detail_tasks: (task.detail_tasks || []).filter((d) => d.deleted_at === null),
+  }))
+})
+
 async function fetchTasks() {
-  const { data, error } = await supabase.from(`tasks`).select().order(`id`, { ascending: false })
+  const { data, error } = await supabase.from('tasks').select(
+    `
+      id,
+      title,
+      created_at,
+      detail_tasks (
+        id,
+        task,
+        is_done,
+        created_at,
+        deleted_at
+      )
+    `,
+  )
 
   if (!error) {
     tasks.value = data
+    taskId.value = data[0].id
   }
 
   tasks.value = data || []
@@ -39,55 +62,91 @@ async function fetchTasks() {
 async function addTask(title) {
   if (!title.trim()) return
 
-  // 1️⃣ Tambah ke UI dulu → animasi jalan
-  const tempTask = {
+  // ambil parent task (misalnya task pertama)
+  const parentTask = tasks.value.find((t) => t.id === taskId.value)
+  if (!parentTask) return
+
+  // 1️⃣ temp detail task (OPTIMISTIC)
+  const tempDetail = {
     id: `temp-${Date.now()}`,
-    title,
+    task: title,
     is_done: false,
+    deleted_at: null,
     pending: true,
   }
 
-  tasks.value.splice(0, 0, tempTask)
+  // pastikan array ada
+  if (!parentTask.detail_tasks) {
+    parentTask.detail_tasks = []
+  }
 
-  // biarkan browser render dulu
+  // tambahkan ke UI
+  parentTask.detail_tasks.unshift(tempDetail)
+
+  // biarkan render dulu
   await new Promise((r) => requestAnimationFrame(r))
 
-  // Kirim ke server
-  const { data, error } = await supabase.from('tasks').insert({ title }).select().single()
+  // 2️⃣ kirim ke database
+  const { data, error } = await supabase
+    .from('detail_tasks')
+    .insert({
+      task_id: taskId.value,
+      task: title,
+    })
+    .select()
+    .single()
 
   if (error) {
-    tasks.value = tasks.value.filter((t) => t.id !== tempTask.id)
+    // rollback
+    parentTask.detail_tasks = parentTask.detail_tasks.filter((d) => d.id !== tempDetail.id)
     return
   }
 
   // update IN-PLACE (INI KUNCI)
-  Object.assign(tempTask, data)
-  delete tempTask.pending
+  Object.assign(tempDetail, data)
+  delete tempDetail.pending
 }
 
 async function toggleDone(task, value) {
   task.is_done = value
-
-  const { error } = await supabase.from('tasks').update({ is_done: value }).eq('id', task.id)
+  const { error } = await supabase.from('detail_tasks').update({ is_done: value }).eq('id', task.id)
 
   if (error) {
     task.is_done = !value
   }
 }
 
-async function deleteTask(id) {
-  const previousTasks = [...tasks.value]
-  tasks.value = tasks.value.filter((task) => task.id !== id)
+async function deleteTask(detailId) {
+  for (const task of tasks.value) {
+    const detail = task.detail_tasks?.find((d) => d.id === detailId)
+    if (detail) {
+      detail.deleted_at = new Date().toISOString()
+      break
+    }
+  }
 
-  const { error } = await supabase.from('tasks').delete().eq('id', id)
+  // 2️⃣ Update ke database
+  const { error } = await supabase
+    .from('detail_tasks')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', detailId)
 
   if (error) {
-    // rollback kalau gagal
-    tasks.value = previousTasks
+    console.error(error)
+
+    // 3️⃣ Rollback kalau gagal
+    for (const task of tasks.value) {
+      const detail = task.detail_tasks?.find((d) => d.id === detailId)
+      if (detail) {
+        detail.deleted_at = null
+        break
+      }
+    }
   }
 }
 
 const onFormSubmit = ({ values }) => {
+  console.log(values)
   addTask(values.title)
 }
 
@@ -108,7 +167,7 @@ const resolver = ({ values }) => {
 const confirm2 = (id, event) => {
   confirm.require({
     target: event.currentTarget,
-    message: 'Do you want to delete this record?',
+    message: 'Delete?',
     icon: 'pi pi-info-circle',
     rejectProps: {
       label: 'Cancel',
@@ -126,17 +185,14 @@ const confirm2 = (id, event) => {
         summary: 'Confirmed',
         detail: 'Record deleted',
         life: 3000,
-        styleClass: 'w-68',
-        baseZIndex: 10,
       })
     },
     reject: () => {
       toast.add({
         severity: 'error',
         summary: 'Rejected',
-        detail: 'You have rejected',
+        detail: 'rejected',
         life: 3000,
-        styleClass: 'w-68',
         autoZIndex: true,
       })
     },
@@ -145,7 +201,8 @@ const confirm2 = (id, event) => {
 </script>
 
 <template>
-  <Toast />
+  <!-- GLOBAL -->
+  <Toast position="top-right" />
   <ConfirmPopup />
 
   <div class="flex justify-center items-center mt-16">
@@ -183,24 +240,28 @@ const confirm2 = (id, event) => {
 
                 <!-- lists -->
                 <TransitionGroup name="list" tag="div" class="flex flex-col gap-4" v-else>
-                  <div v-for="task in tasks" :key="task.id" class="flex items-start gap-3 w-full">
+                  <div
+                    v-for="detail in filteredTasks[0]?.detail_tasks || []"
+                    :key="detail.id"
+                    class="flex items-start gap-3 w-full"
+                  >
                     <!-- KIRI -->
                     <div class="flex items-start gap-2 flex-1 min-w-0">
                       <Checkbox
-                        :modelValue="task.is_done"
-                        :inputId="`${task.id}`"
+                        :modelValue="detail.is_done"
+                        :inputId="`${detail.id}`"
                         binary
-                        @update:modelValue="toggleDone(task, $event)"
+                        @update:modelValue="toggleDone(detail, $event)"
                       />
 
                       <label
-                        :for="task.id"
+                        :for="detail.id"
                         class="text-justify hover:cursor-pointer text-sm leading-snug break-words whitespace-normal max-w-full transition-all duration-200"
                         :class="{
-                          'line-through text-gray-400 scale-[0.98]': task.is_done,
+                          'line-through text-gray-400 scale-[0.98]': detail.is_done,
                         }"
                       >
-                        {{ task.title }}
+                        {{ detail.task }}
                       </label>
                     </div>
 
@@ -210,7 +271,7 @@ const confirm2 = (id, event) => {
                       text
                       severity="danger"
                       class="shrink-0 ml-6"
-                      @click="confirm2(task.id, $event)"
+                      @click="confirm2(detail.id, $event)"
                     />
                   </div>
                 </TransitionGroup>
@@ -220,8 +281,8 @@ const confirm2 = (id, event) => {
               <h1>Todo List</h1>
 
               <ul>
-                <li v-for="task in tasks" :key="task.id">
-                  {{ task.title }}
+                <li v-for="detail in tasks[0]?.detail_tasks || []" :key="detail.id">
+                  {{ detail.task }}
                 </li>
               </ul>
             </TabPanel>
