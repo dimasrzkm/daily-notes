@@ -6,6 +6,7 @@ import ToastService from 'primevue/toastservice'
 import Toast from 'primevue/toast'
 
 // Tailwind + PrimeUI
+import 'primeicons/primeicons.css'
 import './assets/main.css'
 
 import PrimeVue from 'primevue/config'
