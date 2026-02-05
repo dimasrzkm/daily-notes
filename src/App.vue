@@ -17,6 +17,8 @@ import { useToast } from 'primevue/usetoast'
 
 const toast = useToast()
 const confirm = useConfirm()
+const formRef = ref(null)
+const submitting = ref(false)
 
 const todayTask = ref(null) // khusus hari ini
 const allTasks = ref([]) // SEMUA tanggal
@@ -96,7 +98,7 @@ async function initTodayTask() {
 }
 
 async function addTask(title) {
-  if (!title.trim() || !todayTask.value) return
+  if (!title.trim() || !todayTask.value) return false
 
   const temp = {
     id: `temp-${Date.now()}`,
@@ -120,11 +122,12 @@ async function addTask(title) {
 
   if (error) {
     todayTask.value.detail_tasks = todayTask.value.detail_tasks.filter((d) => d.id !== temp.id)
-    return
+    return false
   }
 
   Object.assign(temp, data)
   delete temp.pending
+  return true
 }
 
 async function toggleDone(detail, value) {
@@ -140,7 +143,6 @@ async function toggleDone(detail, value) {
 }
 
 async function deleteTask(detail) {
-  console.log(detail)
   const deletedAt = new Date().toISOString()
   detail.deleted_at = deletedAt
 
@@ -152,8 +154,17 @@ async function deleteTask(detail) {
   if (error) detail.deleted_at = null
 }
 
-const onFormSubmit = ({ values }) => {
-  addTask(values.title)
+const onFormSubmit = async ({ values }) => {
+  if (submitting.value) return
+  submitting.value = true
+
+  const success = await addTask(values.title)
+
+  if (success) {
+    formRef.value.reset()
+  }
+
+  submitting.value = false
 }
 
 const resolver = ({ values }) => {
@@ -216,6 +227,7 @@ const confirm2 = (detail, event) => {
       <template #title>
         <h1 class="text-4xl text-center">Daily Notes</h1>
         <Form
+          ref="formRef"
           v-slot="$form"
           :resolver="resolver"
           @submit="onFormSubmit"
