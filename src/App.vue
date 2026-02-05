@@ -18,30 +18,42 @@ import { useToast } from 'primevue/usetoast'
 const toast = useToast()
 const confirm = useConfirm()
 
-const tasks = ref([]) // SEMUA tanggal
 const todayTask = ref(null) // khusus hari ini
-const taskId = ref(null)
+const allTasks = ref([]) // SEMUA tanggal
 const activeTaskId = ref(null)
-
 const initialLoading = ref(true)
+const taskId = ref(null)
 
 const today = new Date().toISOString().slice(0, 10)
 
-const activeTask = computed(() => tasks.value.find((t) => t.id === activeTaskId.value))
+const activeTask = computed(() => allTasks.value.find((t) => t.id === activeTaskId.value))
 
-const filteredTasks = computed(() => {
-  if (!tasks.value.length) return []
+const filteredTodayDetails = computed(() =>
+  (todayTask.value?.detail_tasks || []).filter((d) => d.deleted_at === null),
+)
 
-  return tasks.value.map((task) => ({
+const filteredAllTasks = computed(() =>
+  allTasks.value.map((task) => ({
     ...task,
     detail_tasks: (task.detail_tasks || []).filter((d) => d.deleted_at === null),
-  }))
-})
+  })),
+)
+
+const taskSelect = `
+  id,
+  date,
+  title,
+  detail_tasks (
+    id,
+    task,
+    is_done,
+    created_at,
+    deleted_at
+  )
+`
 
 onMounted(async () => {
-  await initTodayTask()
-  await fetchTodayTasks()
-  await fetchAllTasks()
+  await Promise.all([initTodayTask(), fetchAllTasks()])
 
   activeTaskId.value = todayTask.value?.id
   initialLoading.value = false
@@ -50,77 +62,36 @@ onMounted(async () => {
 async function fetchAllTasks() {
   const { data, error } = await supabase
     .from('tasks')
-    .select(
-      `
-      id,
-      date,
-      title,
-      detail_tasks (
-        id,
-        task,
-        is_done,
-        deleted_at
-      )
-    `,
-    )
+    .select(taskSelect)
     .order('date', { ascending: false })
 
   if (!error) {
-    tasks.value = data || []
+    allTasks.value = data || []
   }
 }
 
-// ====== INIT TASK PER HARI ======
 async function initTodayTask() {
-  // cek apakah hari ini sudah ada
-  const { data } = await supabase.from('tasks').select('*').eq('date', today).maybeSingle()
+  const { data } = await supabase.from('tasks').select(taskSelect).eq('date', today).maybeSingle()
 
   if (data) {
-    taskId.value = data.id
+    todayTask.value = data
     return
   }
 
-  // kalau belum → buat baru
   const { data: newTask } = await supabase
     .from('tasks')
     .insert({
       date: today,
       title: `Daily Notes - ${today}`,
     })
-    .select()
+    .select(taskSelect)
     .single()
 
-  taskId.value = newTask.id
-}
-
-// ====== FETCH ======
-async function fetchTodayTasks() {
-  const { data } = await supabase
-    .from('tasks')
-    .select(
-      `
-      id,
-      date,
-      title,
-      detail_tasks (
-        id,
-        task,
-        is_done,
-        created_at,
-        deleted_at
-      )
-    `,
-    )
-    .eq('date', today)
-    .single()
-
-  tasks.value = data ? [data] : []
+  todayTask.value = newTask
 }
 
 async function addTask(title) {
-  if (!title.trim()) return
-
-  const parent = tasks.value[0]
+  if (!title.trim() || !todayTask.value) return
 
   const temp = {
     id: `temp-${Date.now()}`,
@@ -130,20 +101,20 @@ async function addTask(title) {
     pending: true,
   }
 
-  parent.detail_tasks.unshift(temp)
+  todayTask.value.detail_tasks.unshift(temp)
   await new Promise((r) => requestAnimationFrame(r))
 
   const { data, error } = await supabase
     .from('detail_tasks')
     .insert({
-      task_id: taskId.value,
+      task_id: todayTask.value.id,
       task: title,
     })
     .select()
     .single()
 
   if (error) {
-    parent.detail_tasks = parent.detail_tasks.filter((d) => d.id !== temp.id)
+    todayTask.value.detail_tasks = todayTask.value.detail_tasks.filter((d) => d.id !== temp.id)
     return
   }
 
@@ -152,6 +123,7 @@ async function addTask(title) {
 }
 
 async function toggleDone(detail, value) {
+  const old = detail.is_done
   detail.is_done = value
 
   const { error } = await supabase
@@ -159,23 +131,20 @@ async function toggleDone(detail, value) {
     .update({ is_done: value })
     .eq('id', detail.id)
 
-  if (error) detail.is_done = !value
+  if (error) detail.is_done = old
 }
 
-async function deleteTask(detailId) {
-  const parent = tasks.value[0]
-  const target = parent.detail_tasks.find((d) => d.id === detailId)
-
-  target.deleted_at = new Date().toISOString()
+async function deleteTask(detail) {
+  console.log(detail)
+  const deletedAt = new Date().toISOString()
+  detail.deleted_at = deletedAt
 
   const { error } = await supabase
     .from('detail_tasks')
-    .update({ deleted_at: target.deleted_at })
-    .eq('id', detailId)
+    .update({ deleted_at: deletedAt })
+    .eq('id', detail.id)
 
-  if (error) {
-    target.deleted_at = null
-  }
+  if (error) detail.deleted_at = null
 }
 
 const onFormSubmit = ({ values }) => {
@@ -196,7 +165,7 @@ const resolver = ({ values }) => {
 }
 
 // Reject Popup
-const confirm2 = (id, event) => {
+const confirm2 = (detail, event) => {
   confirm.require({
     target: event.currentTarget,
     message: 'Delete?',
@@ -211,7 +180,7 @@ const confirm2 = (id, event) => {
       severity: 'danger',
     },
     accept: () => {
-      deleteTask(id)
+      deleteTask(detail)
       toast.add({
         severity: 'success',
         summary: 'Confirmed',
@@ -273,7 +242,7 @@ const confirm2 = (id, event) => {
                 <!-- lists -->
                 <TransitionGroup name="list" tag="div" class="flex flex-col gap-4" v-else>
                   <div
-                    v-for="detail in filteredTasks[0]?.detail_tasks || []"
+                    v-for="detail in filteredTodayDetails"
                     :key="detail.id"
                     class="flex items-start gap-3 w-full"
                   >
@@ -281,7 +250,7 @@ const confirm2 = (id, event) => {
                     <div class="flex items-start gap-2 flex-1 min-w-0">
                       <Checkbox
                         :modelValue="detail.is_done"
-                        :inputId="`${detail.id}`"
+                        :inputId="`${detail}`"
                         binary
                         @update:modelValue="toggleDone(detail, $event)"
                       />
@@ -303,7 +272,7 @@ const confirm2 = (id, event) => {
                       text
                       severity="danger"
                       class="shrink-0 ml-6"
-                      @click="confirm2(detail.id, $event)"
+                      @click="confirm2(detail, $event)"
                     />
                   </div>
                 </TransitionGroup>
@@ -314,7 +283,7 @@ const confirm2 = (id, event) => {
                 <!-- KIRI: LIST TANGGAL -->
                 <ul class="space-y-2 border-r pr-3">
                   <li
-                    v-for="task in tasks"
+                    v-for="task in filteredAllTasks"
                     :key="task.id"
                     @click="activeTaskId = task.id"
                     class="cursor-pointer rounded px-2 py-1 hover:bg-gray-100"
