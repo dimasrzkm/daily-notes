@@ -2,6 +2,12 @@
 @import 'tailwindcss-primeui';
 @import 'primeicons/primeicons.css';
 
+.pi {
+  font-family: 'primeicons' !important;
+  font-style: normal;
+  font-weight: normal;
+}
+
 .p-toast {
   width: 22rem !important;
 }
