@@ -22,7 +22,6 @@ const todayTask = ref(null) // khusus hari ini
 const allTasks = ref([]) // SEMUA tanggal
 const activeTaskId = ref(null)
 const initialLoading = ref(true)
-const taskId = ref(null)
 
 const today = new Date().toISOString().slice(0, 10)
 
@@ -38,6 +37,12 @@ const filteredAllTasks = computed(() =>
     detail_tasks: (task.detail_tasks || []).filter((d) => d.deleted_at === null),
   })),
 )
+
+const activeTaskDetails = computed(() => {
+  if (!activeTask.value) return []
+
+  return (activeTask.value.detail_tasks || []).filter((d) => d.deleted_at === null)
+})
 
 const taskSelect = `
   id,
@@ -302,7 +307,12 @@ const confirm2 = (detail, event) => {
                   </h2>
 
                   <ul v-if="activeTask?.detail_tasks?.length">
-                    <li v-for="detail in activeTask.detail_tasks" :key="detail.id" class="text-sm">
+                    <li
+                      v-for="detail in activeTaskDetails"
+                      :key="detail.id"
+                      class="text-sm"
+                      :class="{ 'line-through text-gray-400': detail.is_done }"
+                    >
                       • {{ detail.task }}
                     </li>
                   </ul>
